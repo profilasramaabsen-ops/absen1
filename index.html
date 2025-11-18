@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Sistem Login Guru & Admin + Absensi Harian & Rekap Bulanan</title>
+<style>
+body{font-family:Arial,Helvetica,sans-serif;background:#f0f3f6;margin:0;padding:20px}
+.center{max-width:480px;margin:40px auto;background:#fff;padding:20px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.06)}
+input,select{width:100%;padding:8px;margin:6px 0;border-radius:8px;border:1px solid #d0d5d9}
+button{padding:10px;border:0;border-radius:8px;background:#0ea5a4;color:#fff;cursor:pointer;margin-top:8px}
+.title{text-align:center;font-size:20px;margin-bottom:8px;font-weight:700}
+.small{font-size:13px;color:#666;text-align:center;margin-top:6px}
+.app{max-width:1000px;margin:12px auto}
+.card{background:#fff;padding:12px;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,0.04);margin-bottom:12px}
+.teacher{border:1px solid #e6e8ea;padding:10px;border-radius:8px;margin-bottom:8px}
+.child{display:flex;align-items:center;justify-content:space-between;margin:6px 0}
+.logout{background:#ef4444}
+.userRow{display:flex;gap:8px;margin:8px 0}
+.userRow input{flex:1}
+.muted{color:#666;font-size:13px}
+.row{display:flex;gap:8px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:8px;border:1px solid #ddd;text-align:left}
+.radioGroup label{margin-right:12px;}
+.status{display:none;padding:10px;border-radius:8px;margin:10px 0;text-align:center}
+.status.success{background:#d1fae5;color:#065f46;display:block}
+.status.error{background:#fee2e2;color:#991b1b;display:block}
+@media(max-width:760px){.row{flex-direction:column}}
+</style>
+</head>
+<body>
+
+<div id="loginPage" class="center">
+  <div class="title">Login</div>
+  <input id="username" placeholder="Username (mis: admin, tsalis)" />
+  <input id="password" type="password" placeholder="Password" />
+  <button id="loginBtn">Masuk</button>
+  <div class="small">Admin & Guru masing-masing punya akun.</div>
+  <div id="loginStatus" class="status"></div>
+</div>
+
+<div id="appPage" class="app" style="display:none">
+  <div class="card">
+    <h2 id="welcome"></h2>
+    <div class="muted">Role: <span id="roleLabel"></span></div>
+    <div id="syncStatus" class="status"></div>
+  </div>
+
+  <div id="adminControls" class="card" style="display:none">
+    <h3>Kelola Guru & Akun (Admin)</h3>
+    <input id="newTeacherName" placeholder="Nama Guru" />
+    <input id="newTeacherUser" placeholder="Username Guru" />
+    <input id="newTeacherPass" placeholder="Password Guru" />
+    <div class="row">
+      <button id="addTeacher">Tambah Guru</button>
+      <button id="exportAll" style="background:#2563eb">Ekspor Data</button>
+      <button id="syncToCloud" style="background:#7c3aed">Sync ke Cloud</button>
+      <button id="syncFromCloud" style="background:#059669">Sync dari Cloud</button>
+    </div>
+    <div style="margin-top:10px"><strong>Kelola Sandi Guru</strong>
+      <div id="userList"></div>
+    </div>
+  </div>
+
+  <div id="attendanceControls" class="card">
+    <h3>Absensi</h3>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <label class="muted">Tanggal:</label>
+      <input type="date" id="attendDate" />
+      <label class="muted">(Admin: pilih bulan untuk rekap)</label>
+      <select id="reportMonth"></select>
+      <button id="refreshReport">Tampilkan Rekap</button>
+    </div>
+  </div>
+
+  <div id="teachersListArea" class="card">
+    <h3>Daftar Guru & Anak</h3>
+    <div id="teachersList"></div>
+  </div>
+
+  <div id="monthlyReport" class="card" style="display:none">
+    <h3>Rekap Bulanan</h3>
+    <div id="reportContent"></div>
+  </div>
+
+  <div class="card">
+    <button id="logoutBtn" class="logout">Logout</button>
+  </div>
+</div>
+
+<!-- Firebase SDK -->
+<script type="module">
+  // Import the functions you need from the SDKs you need
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
+  import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-analytics.js";
+  import { getDatabase, ref, set, get, update, remove } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
+
+  // Your web app's Firebase configuration
+  const firebaseConfig = {
+    apiKey: "AIzaSyAqaQZGuz-e2QzuSzfRX5l4HvvAphrGxGs",
+    authDomain: "absen-bad36.firebaseapp.com",
+    databaseURL: "https://absen-bad36-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "absen-bad36",
+    storageBucket: "absen-bad36.firebasestorage.app",
+    messagingSenderId: "803802188092",
+    appId: "1:803802188092:web:407d5a03ce53c743827639",
+    measurementId: "G-17BNNF65L5"
+  };
+
+  // Initialize Firebase
+  const app = initializeApp(firebaseConfig);
+  const analytics = getAnalytics(app);
+  const database = getDatabase(app);
+
+  // Constants
+  const LS_USERS = 'app_users_v1';
+  const LS_DATA = 'app_data_v1'; 
+  const LS_ATTEND = 'app_attend_v1';
+  const LS_LAST_SYNC = 'app_last_sync';
+
+  // Utility functions
+  function loadJSON(k, f) {
+    try {
+      const v = localStorage.getItem(k);
+      return v ? JSON.parse(v) : f;
+    } catch(e) {
+      return f;
+    }
+  }
+
+  function saveJSON(k, v) {
+    localStorage.setItem(k, JSON.stringify(v));
+  }
+
+  function showStatus(element, message, type = 'success') {
+    element.textContent = message;
+    element.className = `status ${type}`;
+    setTimeout(() => {
+      element.className = 'status';
+    }, 3000);
+  }
+
+  // Initialize data
+  let USERS = loadJSON(LS_USERS, {
+    admin: {username: 'admin', password: 'admin123', role: 'admin', name: 'Admin'},
+    tsalis: {username: 'tsalis', password: '1234', role: 'guru', name: 'kang tsalis'},
+    sayaru: {username: 'sayaru', password: '1234', role: 'guru', name: 'kang sayaru'},
+    alam: {username: 'alam', password: '1234', role: 'guru', name: 'kang alam'}
+  });
+
+  let DATA = loadJSON(LS_DATA, [
+    {id: 'g1', username: 'tsalis', name: 'kang tsalis', children: ['Anak 1', 'Anak 2', 'Anak 3', 'Anak 4']},
+    {id: 'g2', username: 'sayaru', name: 'kang sayaru', children: ['Anak 1 a', 'Anak 2 a', 'Anak 3 a', 'Anak 4 a']},
+    {id: 'g3', username: 'alam', name: 'kang alam', children: ['Anak 1 b', 'Anak 2 b', 'Anak 3 b', 'Anak 4 b']}
+  ]);
+
+  let ATTEND = loadJSON(LS_ATTEND, {});
+
+  // Firebase functions
+  async function syncToCloud() {
+    try {
+      const syncStatus = document.getElementById('syncStatus');
+      showStatus(syncStatus, 'Menyimpan data ke cloud...', 'success');
+      
+      const dataToSync = {
+        users: USERS,
+        data: DATA,
+        attend: ATTEND,
+        lastSync: new Date().toISOString()
+      };
+
+      await set(ref(database, 'appData'), dataToSync);
+      saveJSON(LS_LAST_SYNC, dataToSync.lastSync);
+      showStatus(syncStatus, 'Data berhasil disimpan ke cloud!', 'success');
+    } catch (error) {
+      console.error('Error syncing to cloud:', error);
+      showStatus(syncStatus, 'Gagal menyimpan ke cloud: ' + error.message, 'error');
+    }
+  }
+
+  async function syncFromCloud() {
+    try {
+      const syncStatus = document.getElementById('syncStatus');
+      showStatus(syncStatus, 'Mengambil data dari cloud...', 'success');
+      
+      const snapshot = await get(ref(database, 'appData'));
+      if (snapshot.exists()) {
+        const cloudData = snapshot.val();
+        USERS = cloudData.users || USERS;
+        DATA = cloudData.data || DATA;
+        ATTEND = cloudData.attend || ATTEND;
+        
+        persistAll();
+        renderTeachers();
+        renderUserManager();
+        showStatus(syncStatus, 'Data berhasil diambil dari cloud!', 'success');
+      } else {
+        showStatus(syncStatus, 'Tidak ada data di cloud', 'error');
+      }
+    } catch (error) {
+      console.error('Error syncing from cloud:', error);
+      showStatus(syncStatus, 'Gagal mengambil dari cloud: ' + error.message, 'error');
+    }
+  }
+
+  async function backupToCloud() {
+    // Auto-backup when making significant changes
+    if (currentUser && currentUser.role === 'admin') {
+      try {
+        await syncToCloud();
+      } catch (error) {
+        console.log('Auto-backup failed:', error);
+      }
+    }
+  }
+
+  // DOM elements
+  const loginPage = document.getElementById('loginPage');
+  const appPage = document.getElementById('appPage');
+  const loginBtn = document.getElementById('loginBtn');
+  const username = document.getElementById('username');
+  const password = document.getElementById('password');
+  const welcome = document.getElementById('welcome');
+  const roleLabel = document.getElementById('roleLabel');
+  const adminControls = document.getElementById('adminControls');
+  const userList = document.getElementById('userList');
+  const teachersList = document.getElementById('teachersList');
+  const logoutBtn = document.getElementById('logoutBtn');
+  const addTeacher = document.getElementById('addTeacher');
+  const newTeacherName = document.getElementById('newTeacherName');
+  const newTeacherUser = document.getElementById('newTeacherUser');
+  const newTeacherPass = document.getElementById('newTeacherPass');
+  const attendDate = document.getElementById('attendDate');
+  const reportMonth = document.getElementById('reportMonth');
+  const refreshReport = document.getElementById('refreshReport');
+  const monthlyReport = document.getElementById('monthlyReport');
+  const reportContent = document.getElementById('reportContent');
+  const exportAll = document.getElementById('exportAll');
+  const syncToCloudBtn = document.getElementById('syncToCloud');
+  const syncFromCloudBtn = document.getElementById('syncFromCloud');
+  const loginStatus = document.getElementById('loginStatus');
+
+  let currentUser = null;
+
+  function uid() {
+    return 'id-' + Math.random().toString(36).slice(2, 9);
+  }
+
+  function persistAll() {
+    saveJSON(LS_USERS, USERS);
+    saveJSON(LS_DATA, DATA);
+    saveJSON(LS_ATTEND, ATTEND);
+  }
+
+  function showLogin() {
+    loginPage.style.display = 'block';
+    appPage.style.display = 'none';
+  }
+
+  function showApp() {
+    loginPage.style.display = 'none';
+    appPage.style.display = 'block';
+  }
+
+  function initDates() {
+    const today = new Date().toISOString().slice(0, 10);
+    attendDate.value = today;
+    reportMonth.innerHTML = '';
+    const now = new Date();
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const val = d.toISOString().slice(0, 7);
+      const opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = val;
+      reportMonth.appendChild(opt);
+    }
+    reportMonth.value = now.toISOString().slice(0, 7);
+  }
+
+  function renderUserManager() {
+    userList.innerHTML = '';
+    Object.keys(USERS).forEach(k => {
+      const u = USERS[k];
+      if (u.role !== 'guru') return;
+      const row = document.createElement('div');
+      row.className = 'userRow';
+      const name = document.createElement('input');
+      name.value = u.username;
+      name.disabled = true;
+      const pass = document.createElement('input');
+      pass.value = u.password;
+      const save = document.createElement('button');
+      save.textContent = 'Simpan';
+      save.style.width = '90px';
+      const del = document.createElement('button');
+      del.textContent = 'Hapus Akun';
+      del.style.background = '#ef4444';
+      del.style.width = '110px';
+      save.onclick = () => {
+        u.password = pass.value;
+        persistAll();
+        backupToCloud();
+        alert('Password diperbarui!');
+      };
+      del.onclick = () => {
+        if (!confirm('Hapus akun ini?')) return;
+        delete USERS[k];
+        DATA = DATA.filter(t => t.username !== u.username);
+        persistAll();
+        backupToCloud();
+        renderTeachers();
+        renderUserManager();
+      };
+      row.append(name, pass, save, del);
+      userList.appendChild(row);
+    });
+  }
+
+  function renderTeachers() {
+    teachersList.innerHTML = '';
+    DATA.forEach(g => {
+      if (!currentUser) return;
+      if (currentUser.role !== 'admin' && currentUser.username !== g.username) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'teacher';
+      wrap.innerHTML = `<strong>${g.name}</strong>`;
+      g.children.forEach(child => {
+        const row = document.createElement('div');
+        row.className = 'child';
+        const left = document.createElement('div');
+        left.className = 'radioGroup';
+        const key = g.id + '|' + child;
+        const date = attendDate.value;
+        if (!ATTEND[date]) ATTEND[date] = {};
+        if (!(key in ATTEND[date])) ATTEND[date][key] = null;
+
+        ['hadir', 'sakit', 'izin'].forEach(v => {
+          const r = document.createElement('input');
+          r.type = 'radio';
+          r.name = key;
+          r.value = v;
+          r.checked = ATTEND[date][key] === v;
+          r.onchange = () => {
+            ATTEND[date][key] = r.value;
+            persistAll();
+            backupToCloud();
+          };
+          const label = document.createElement('label');
+          label.appendChild(r);
+          label.appendChild(document.createTextNode(' ' + v));
+          left.appendChild(label);
+        });
+
+        row.appendChild(left);
+        row.appendChild(document.createTextNode(' ' + child));
+
+        if (currentUser.role === 'admin') {
+          const del = document.createElement('button');
+          del.textContent = 'Hapus';
+          del.style.background = '#ef4444';
+          del.onclick = () => {
+            if (!confirm('Hapus anak ini?')) return;
+            g.children = g.children.filter(c => c !== child);
+            persistAll();
+            backupToCloud();
+            renderTeachers();
+          };
+          row.appendChild(del);
+        }
+        wrap.appendChild(row);
+      });
+
+      const ctrl = document.createElement('div');
+      ctrl.style.marginTop = '8px';
+      const inp = document.createElement('input');
+      inp.placeholder = 'Nama anak baru';
+      inp.style.width = '70%';
+      const btn = document.createElement('button');
+      btn.textContent = 'Tambah';
+      btn.style.width = '28%';
+      btn.onclick = () => {
+        if (!inp.value.trim()) return alert('Isi nama anak');
+        g.children.push(inp.value.trim());
+        inp.value = '';
+        persistAll();
+        backupToCloud();
+        renderTeachers();
+      };
+      ctrl.append(inp, btn);
+      wrap.appendChild(ctrl);
+
+      teachersList.appendChild(wrap);
+    });
+  }
+
+  function buildMonthlyReport(month) {
+    const detail = {};
+    Object.keys(ATTEND).forEach(date => {
+      if (!date.startsWith(month)) return;
+      Object.keys(ATTEND[date]).forEach(k => {
+        const [gid, child] = k.split('|');
+        const g = DATA.find(x => x.id === gid);
+        const gname = g ? g.name : gid;
+        if (!detail[gname]) detail[gname] = {};
+        if (!detail[gname][child]) detail[gname][child] = {hadir: 0, sakit: 0, izin: 0, absen: 0};
+        const val = ATTEND[date][k];
+        if (val === 'hadir') detail[gname][child].hadir++;
+        else if (val === 'sakit') detail[gname][child].sakit++;
+        else if (val === 'izin') detail[gname][child].izin++;
+      });
+    });
+
+    const totalDays = (y, m) => new Date(y, m, 0).getDate();
+    const [yy, mm] = month.split('-').map(Number);
+    const days = totalDays(yy, mm);
+
+    Object.keys(detail).forEach(guru => {
+      Object.keys(detail[guru]).forEach(child => {
+        const d = detail[guru][child];
+        d.absen = days - (d.hadir + d.sakit + d.izin);
+      });
+    });
+
+    let html = `<table><tr style="background:#e2e8f0;font-weight:bold"><th>Guru</th><th>Anak</th><th>Hadir</th><th>Sakit</th><th>Izin</th><th>Absen</th></tr>`;
+    Object.keys(detail).forEach(guru => {
+      html += `<tr style="background:#f8fafc"><td colspan="6"><strong>${guru}</strong></td></tr>`;
+      let sum = {hadir: 0, sakit: 0, izin: 0, absen: 0};
+      Object.keys(detail[guru]).forEach(child => {
+        const d = detail[guru][child];
+        sum.hadir += d.hadir;
+        sum.sakit += d.sakit;
+        sum.izin += d.izin;
+        sum.absen += d.absen;
+        html += `<tr><td>${guru}</td><td>${child}</td><td style="text-align:center">${d.hadir}</td>
+               <td style="text-align:center">${d.sakit}</td><td style="text-align:center">${d.izin}</td>
+               <td style="text-align:center">${d.absen}</td></tr>`;
+      });
+      html += `<tr style="background:#f1f5f9;font-weight:bold">
+             <td colspan="2" style="text-align:right">TOTAL ${guru}:</td>
+             <td style="text-align:center">${sum.hadir}</td>
+             <td style="text-align:center">${sum.sakit}</td>
+             <td style="text-align:center">${sum.izin}</td>
+             <td style="text-align:center">${sum.absen}</td>
+             </tr>`;
+    });
+    html += '</table>';
+    reportContent.innerHTML = Object.keys(detail).length === 0 ? '<div class="muted">Belum ada data untuk bulan ini</div>' : html;
+    monthlyReport.style.display = 'block';
+  }
+
+  // Event listeners
+  loginBtn.onclick = () => {
+    const u = USERS[username.value];
+    if (!u || u.password !== password.value) {
+      showStatus(loginStatus, 'Username atau password salah!', 'error');
+      return;
+    }
+    currentUser = u;
+    welcome.textContent = 'Selamat datang, ' + (u.name || u.username);
+    roleLabel.textContent = u.role;
+    showApp();
+    adminControls.style.display = u.role === 'admin' ? 'block' : 'none';
+    initDates();
+    renderTeachers();
+    renderUserManager();
+    
+    // Auto-sync from cloud for admin
+    if (u.role === 'admin') {
+      setTimeout(syncFromCloud, 1000);
+    }
+  };
+
+  addTeacher.onclick = () => {
+    if (!newTeacherName.value.trim() || !newTeacherUser.value.trim() || !newTeacherPass.value.trim()) {
+      return alert('Lengkapi semua kolom');
+    }
+    if (USERS[newTeacherUser.value]) {
+      return alert('Username sudah dipakai');
+    }
+    const id = uid();
+    USERS[newTeacherUser.value] = {
+      username: newTeacherUser.value,
+      password: newTeacherPass.value,
+      role: 'guru',
+      name: newTeacherName.value
+    };
+    DATA.push({
+      id,
+      username: newTeacherUser.value,
+      name: newTeacherName.value,
+      children: []
+    });
+    newTeacherName.value = '';
+    newTeacherUser.value = '';
+    newTeacherPass.value = '';
+    persistAll();
+    backupToCloud();
+    renderTeachers();
+    renderUserManager();
+    alert('Guru ditambahkan!');
+  };
+
+  logoutBtn.onclick = () => {
+    currentUser = null;
+    username.value = '';
+    password.value = '';
+    showLogin();
+    monthlyReport.style.display = 'none';
+  };
+
+  attendDate.onchange = () => renderTeachers();
+
+  refreshReport.onclick = () => {
+    if (currentUser.role !== 'admin') return alert('Hanya admin');
+    buildMonthlyReport(reportMonth.value);
+  };
+
+  exportAll.onclick = () => {
+    const blob = new Blob([JSON.stringify({USERS, DATA, ATTEND}, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'backup_guru_anak.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  syncToCloudBtn.onclick = syncToCloud;
+  syncFromCloudBtn.onclick = syncFromCloud;
+
+  // Initialize app
+  initDates();
+  persistAll();
+  showLogin();
+
+  // Auto-sync on load for admin (if already logged in from previous session)
+  const lastUser = loadJSON('current_user', null);
+  if (lastUser) {
+    username.value = lastUser.username;
+    // Don't auto-login for security
+  }
+</script>
+</body>
+</html>
